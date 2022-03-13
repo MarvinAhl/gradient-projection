@@ -38,8 +38,9 @@ class GradientProjection:
 
             # Stop and return result if gradient is orthogonal
             # to constraint and pointing towards infeasable area
-            if grad_proj_norm <= eps and np.all(r <= 0.):
-                return self.y
+            if grad_proj_norm <= eps:
+                if r == None or np.all(r <= 0.):
+                    return self.y
             
             # Otherwise determin if an active constraint should be dropped to inactivity
             if len(self.active_constr) > 0:
@@ -230,13 +231,13 @@ class GradientProjection:
 
 
 if __name__ == '__main__':
-    f = lambda y : y[0, 0]**2 + y[1, 0]**2
+    f = lambda y : (y[0, 0]-2.)**2 + (y[1, 0]-2.)**2
     f_grad = lambda y : np.array([[2*y[0, 0]], [2*y[1, 0]]], dtype=np.float32)
 
     N_l = np.array([[3., 1/3, -1., 0.], [1., 1., 0., -1.]], dtype=np.float32)
     v_l = np.array([[3.], [1.], [-4.], [-4.]], dtype=np.float32)
 
-    y = np.array([[4.], [0.7]])
+    y = np.array([[3.], [0.7]])
 
-    solver = GradientProjection(f, N_l, v_l, f_grad)
+    solver = GradientProjection(f, N_l, v_l)
     print(solver.solve(y))
