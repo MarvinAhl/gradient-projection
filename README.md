@@ -1,2 +1,2 @@
 # Gradient Projection
-Implementation fo Gradient Projection Algorithm for solving nonlinear programming problems.
+Implementation of Gradient Projection Algorithm for solving nonlinear programming problems.
