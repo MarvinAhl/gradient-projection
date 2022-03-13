@@ -128,16 +128,6 @@ class GradientProjection:
 
         return N_qs_inv, r, grad_proj, grad_proj_norm
 
-    def _calc_r(self, y):
-        N_q = self._calc_N_q()
-
-        N_qs = N_q.T @ N_q
-        N_qs_inv = np.linalg.inv(N_qs)
-
-        neg_f_grad = -self._f_grad(y)
-
-        return N_qs_inv @ N_q.T @ neg_f_grad
-
     def _calc_N_q(self):
         """
         Calculates Matrix of active constraints.
@@ -155,19 +145,6 @@ class GradientProjection:
         v_j = self.v_l[inactive_constr]
 
         return N_j, v_j
-    
-    def _calc_P_q(self):
-        """
-        Calculates projection matrix P_q.
-        """
-        N_q = self._calc_N_q()
-
-        N_qs = N_q.T @ N_q
-        N_qs_inv = np.linalg.inv(N_qs)
-        P_q_t = N_q @ N_qs_inv @ N_q.T
-
-        I = np.eye(len(self.y))
-        return I - P_q_t
 
     def _add_constr(self, i):
         """
