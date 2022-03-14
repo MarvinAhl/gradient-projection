@@ -31,7 +31,9 @@ class GradientProjection:
         eps and linear interpolation margin delta.
         """
         self.y = init_y  # Solver starting point.
-        self._calc_active_constr()  # Calc initially active constraints
+        # Check if starting point is feasable and find one if not
+        if not self._find_feasable_point():
+            return None
 
         while True:
             N_qs_inv, r, grad_proj, grad_proj_norm = self._calc_utils()
@@ -179,12 +181,60 @@ class GradientProjection:
             self.N_l[:, i] /= norm
             self.v_l[i] /= norm
     
-    def _calc_active_constr(self):
+    def _find_feasable_point(self):
+        """
+        Finds feasable point or returns False if a feasable point doesnt exist.
+        """
+        lamb = self.N_l.T @ self.y - self.v_l
+        infeas_args = np.atleast_1d(np.argwhere(lamb.squeeze() < -1e-4).squeeze()).tolist()
+
+        # Return if point is feasable
+        if len(infeas_args) == 0:
+            self._add_active_constr()
+            return True
+        
+        while True:
+            # Calc feasable point
+            lamb_q = lamb[infeas_args]
+            N_q = self.N_l[:, infeas_args]
+
+            N_qs = N_q.T @ N_q
+            N_qs_inv = np.linalg.inv(N_qs)
+
+            self.y -= N_q @ N_qs_inv @ lamb_q  # New feasable point candidate
+            new_lamb = self.N_l.T @ self.y - self.v_l
+
+            new_infeas_args = np.atleast_1d(np.argwhere(new_lamb.squeeze() < -1e-4).squeeze()).tolist()
+            if len(new_infeas_args) == 0:  # Point is actually feasable
+                self._add_active_constr()
+                return True
+            
+            qp = new_lamb.argmin()  # Otherwise find minimum constraint
+            n_qp = N_l[:, [qp]]
+            r = N_qs_inv @ (N_q.T @ n_qp)
+            P_q_n_qp = n_qp - N_q @ r  # And compute projection on intersection Q
+
+            # Three possibilities:
+            # 1. No solution exists
+            if np.isclose(np.linalg.norm(P_q_n_qp), 0) and np.all(r <= 0):
+                return False  # There is no feasable solution
+            # 2. One constraint is dropped
+            elif np.isclose(np.linalg.norm(P_q_n_qp), 0, atol=1e-4) and np.any(r > 0):
+                drop_constr = np.atleast_1d(np.argwhere(r.squeeze() > 0).squeeze())[0]
+                infeas_args.pop(drop_constr)  # Drop one constraint
+            # 3. No constraint is dropped
+
+            # Add one anyways
+            infeas_args.append(qp)
+            infeas_args.sort()
+            lamb = self.N_l.T @ self.y - self.v_l
+    
+    def _add_active_constr(self):
         """
         Add all constraints that are active to list of active constraints.
         """
-        constr = self.N_l.T @ self.y - self.v_l
-        self.active_constr = np.atleast_1d(np.argwhere(np.isclose(constr.squeeze(), 0)).squeeze()).tolist()
+        lamb = self.N_l.T @ self.y - self.v_l
+        self.active_constr = np.atleast_1d(np.argwhere(np.isclose(lamb.squeeze(), 0, atol=1e-4)).squeeze()).tolist()
 
     def _grad(self, f, y, eps=1e-5):
         """
@@ -214,7 +264,7 @@ if __name__ == '__main__':
     N_l = np.array([[3., 1/3, -1., 0.], [1., 1., 0., -1.]], dtype=np.float32)
     v_l = np.array([[3.], [1.], [-4.], [-4.]], dtype=np.float32)
 
-    y = np.array([[3.], [0.7]])
+    y = np.array([[3.8], [-1.]])
 
     solver = GradientProjection(f, N_l, v_l)
     print(solver.solve(y))
