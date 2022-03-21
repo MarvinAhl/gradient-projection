@@ -5,26 +5,31 @@ class TrajectoryOptimization:
     """
     Vectors have to be numpy column vectors if not stated differently!
     """
-    def __init__(self, N, J, a, d_a_x=None, d_a_u=None):
+    def __init__(self, N, t_f, J, a, d_J_x=None, d_J_u=None, d_a_x=None, d_a_u=None):
         """
-        a is a list of functions of of the form x(k+1) = a(x(k), u(k))
-        = x(k) + a_c(x(k), u(k)) * dt
-        derived from the continuous equation x_dot = a_c(x, u).
-        d_a_x and d_a_u are Jacobians of partial derivatives of a and can
+        a is a list of functions of of the form x_dot = a(x, u)
+        d_a_x and d_a_u are Jacobians of partial derivatives of the continuous a and can
         be analytically supplied (highly recommended).
+        J is the discrete function to be minimized. Takes two big column vectors of the form
+        x = [x_1, x_2, ... , x_N]^T and u = [u_1, u_2, ... , u_(N-1)]^T
         """
         self.N = N  # Number of discrete collocation points (this N is always one more than N in book)
-        self.J = J  # Function to be minimized
-        self.a = a  # Discrete system dynamics
+        self.dt = t_f / (N-1)
+        self.J = J  # Discrete Function to be minimized
+        self._d_J_x = d_J_x  # dJ/dx
+        self._d_J_u = d_J_u  # dJ/du
 
-        self._d_a_x = self._calc_d_a_x if d_a_x == None else d_a_x
-        self._d_a_u = self._calc_d_a_u if d_a_u == None else d_a_u
+        self.a_D = self._discretize_dynamics(a)  # Discrete system dynamics
+        # Either calculate derivatives numerically or discretize analytical derivatives
+        self._d_a_x = self._calc_d_a_x if d_a_x == None else lambda x, u : np.eye(len(x)) + d_a_x(x, u) * self.dt
+        self._d_a_u = self._calc_d_a_u if d_a_u == None else lambda x, u : d_a_u(x, u) * self.dt
 
-    def solve(self, init_x_traj, init_u_traj):
+    def solve(self, init_x_traj, init_u_traj, gamma=1e-3):
         """
         Solve Trajectory Optimization problem given an inital Trajectory.
         init_x_traj and init_u_traj are Arrays of numpy column Vectors,
         x as dimension N x N_x x 1 and u has dimension N-1 x N_u x 1
+        gamma is the convergence margin.
         """
         x_traj = init_x_traj
         u_traj = init_u_traj
@@ -35,7 +40,48 @@ class TrajectoryOptimization:
             x_H = self._calc_x_H(As, cs, x_traj[0])
             D = self._calc_D(As, Bs)
 
-            # TODO: Rest
+            # TODO: Derive N_l and v_l from boundary conditions
+
+            J_u = lambda u : self.J(D @ u + x_H, u)  # Find J of u
+            if self._d_J_x == None or self._d_J_u == None:
+                d_J_u_u = None
+            else:
+                # Total derivative dJ/du made up from dx/du * dJ/dx + dJ/du.
+                d_J_u_u = lambda u : D.T @ self._d_J_x(D @ u + x_H, u) + self._d_J_u(D @ u + x_H, u)
+            
+            solver = GradientProjection(J_u, N_l, v_l, d_J_u_u)
+            u_traj_r = np.reshape(u_traj, (len(u_traj)*len(u_traj[0]), 1))
+            new_u_traj_r = solver.solve(u_traj_r)  # Reshape trajectory to be one big column vector
+            
+            if np.all(new_u_traj_r == None):
+                return None, None, None  # Trajectory optimization failed
+            
+            new_u_traj = np.reshape(new_u_traj, (len(u_traj), len(u_traj[0]), 1))
+
+            new_x_traj_r = D @ new_u_traj_r + x_H
+            new_x_traj = np.reshape(new_x_traj_r, (len(x_traj), len(x_traj[0]), 1))
+
+            # Return if trajectory converges
+            if np.linalg.norm(new_u_traj_r - u_traj_r) <= gamma:
+                J_min = self.J(new_x_traj_r, new_u_traj_r)  # Const value of optimal trajectory
+                return new_x_traj, new_u_traj, J_min
+            
+            # Update trajectory and repeat
+            x_traj = new_x_traj
+            u_traj = new_u_traj
+
+    def _discretize_dynamics(self, a):
+        """
+        Takes continuous state dynamics of the form x_dot = a(x, u) and converts
+        them to a_D of the form x(k+1) = a_D(x(k), u(k)) = x(k) + a(x(k), u(k)) * dt.
+        """
+        a_D = []
+
+        for constr in a:
+            discr_constr = lambda x, u : x + constr(x, u) * self.dt
+            a_D.append(discr_constr)
+
+        return a_D
     
     def _calc_D(self, As, Bs):
         """
@@ -104,7 +150,7 @@ class TrajectoryOptimization:
         """
         a_res = np.zeros((len(x), 1), dtype=np.float32)
 
-        for a, i in enumerate(self.a):
+        for a, i in enumerate(self.a_D):
             a_res[i, 0] = a(x, u)
         
         return a_res
@@ -115,7 +161,7 @@ class TrajectoryOptimization:
         """
         d_a_x = np.zeros((len(x), len(x)), dtype=np.float32)
 
-        for a, i in enumerate(self.a):
+        for a, i in enumerate(self.a_D):
             a_x = lambda x : a(x, u)
             a_x_grad = self._grad(a_x, x)
             d_a_x[i, :] = a_x_grad.squeeze()
@@ -128,7 +174,7 @@ class TrajectoryOptimization:
         """
         d_a_u = np.zeros((len(x), len(u)), dtype=np.float32)
 
-        for a, i in enumerate(self.a):
+        for a, i in enumerate(self.a_D):
             a_u = lambda u : a(x, u)
             a_u_grad = self._grad(a_u, u)
             d_a_u[i, :] = a_u_grad.squeeze()
