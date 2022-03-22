@@ -1,32 +1,38 @@
+"""
+Author: Marvin Ahlborn
+Reference: "Optimal Control Theory: An Introduction" by Donald E. Kirk
+"""
+
 import numpy as np
 from gradient_projection import GradientProjection
 
 class TrajectoryOptimization:
     """
-    Vectors have to be numpy column vectors if not stated differently!
+    Optimizer for solving Optimal Control Problems using Gradient Projection Nonlinear Programming Algorithm.
     """
     def __init__(self, N, t_f, x_L, x_H, u_L, u_H, J, a, d_J_x=None, d_J_u=None, d_a_x=None, d_a_u=None):
         """
         N is the number of discrete collocation points. t_f is the final time.
         x_L, x_H, u_L, u_H are the upper and lower boundary constraints for state and control.
-        They have to be big column vectors of all states at all collocation points concatenated with eachother
-        of shape N*x_N x 1 for the state and (N-1)*x_U x 1 for the control (Like what J takes as arguments).
+        They have to be arrays of column vectors of all states at all collocation points
+        of shape (N x x_N x 1) for the state and (N-1 x x_U x 1) for the control (Like what J takes as arguments).
         a is a list of functions of of the form x_dot = a(x, u).
         d_a_x and d_a_u are Jacobians of partial derivatives of the continuous a and can
         be analytically supplied (Highly recommended!).
-        J is the discrete function to be minimized. Takes two big column vectors of the form
-        x = [x_1, x_2, ... , x_N]^T and u = [u_1, u_2, ... , u_(N-1)]^T
+        J is the discrete function to be minimized. Takes two arrays of column vectors of the form
+        (N x N_x x 1) for x and (N-1 x N_u x 1) for u
         """
         self.N = N  # Number of discrete collocation points (this N is always one more than N in book)
         self.dt = t_f / (N-1)  # Time interval between discrete collocation points
 
-        # Upper and lower boundaries for x and u
-        self.x_L = x_L
-        self.x_H = x_H
-        self.u_L = u_L
-        self.u_H = u_H
+        # Upper and lower boundaries for x and u, reshape to one big column vector
+        self.x_L = np.reshape(x_L, (len(x_L)*len(x_L[0]), 1))
+        self.x_H = np.reshape(x_H, (len(x_H)*len(x_H[0]), 1))
+        self.u_L = np.reshape(u_L, (len(u_L)*len(u_L[0]), 1))
+        self.u_H = np.reshape(u_H, (len(u_H)*len(u_H[0]), 1))
 
-        self.J = J  # Discrete Function to be minimized
+        # Discrete Function to be minimized, reshape inputs to ease processing
+        self.J = lambda x, u : J(np.reshape(x, (N, len(x)/N, 1)), np.reshape(u, (N-1, len(u)/(N-1), 1)))
         self._d_J_x = d_J_x  # dJ/dx
         self._d_J_u = d_J_u  # dJ/du
 
@@ -39,7 +45,7 @@ class TrajectoryOptimization:
         """
         Solve Trajectory Optimization problem given an inital Trajectory.
         init_x_traj and init_u_traj are Arrays of numpy column Vectors,
-        x as dimension N x N_x x 1 and u has dimension N-1 x N_u x 1
+        x as dimension (N x N_x x 1) and u has dimension (N-1 x N_u x 1)
         gamma is the convergence margin.
         """
         x_traj = init_x_traj
@@ -99,8 +105,8 @@ class TrajectoryOptimization:
         """
         a_D = []
 
-        for constr in a:
-            discr_constr = lambda x, u : x + constr(x, u) * self.dt
+        for i, constr in enumerate(a):
+            discr_constr = lambda x, u : x[i, 0] + constr(x, u) * self.dt
             a_D.append(discr_constr)
 
         return a_D
@@ -149,9 +155,9 @@ class TrajectoryOptimization:
         x_traj and u_traj have the form N x N_x x 1 and N-1 x N_u x 1 where
         N_x is the x-Vector's dimension and N_u is the u-Vector's dimension.
         """
-        As = np.zeros((self.N-1, len(x), len(x)), dtype=np.float32)
-        Bs = np.zeros((self.N-1, len(x), len(u)), dtype=np.float32)
-        cs = np.zeros((self.N-1, len(x), 1), dtype=np.float32)
+        As = np.zeros((self.N-1, len(x_traj[0]), len(x_traj[0])), dtype=np.float32)
+        Bs = np.zeros((self.N-1, len(x_traj[0]), len(u_traj[0])), dtype=np.float32)
+        cs = np.zeros((self.N-1, len(x_traj[0]), 1), dtype=np.float32)
 
         for i in range(self.N - 1):
             x = x_traj[i]
@@ -172,7 +178,7 @@ class TrajectoryOptimization:
         """
         a_res = np.zeros((len(x), 1), dtype=np.float32)
 
-        for a, i in enumerate(self.a_D):
+        for i, a in enumerate(self.a_D):
             a_res[i, 0] = a(x, u)
         
         return a_res
@@ -183,7 +189,7 @@ class TrajectoryOptimization:
         """
         d_a_x = np.zeros((len(x), len(x)), dtype=np.float32)
 
-        for a, i in enumerate(self.a_D):
+        for i, a in enumerate(self.a_D):
             a_x = lambda x : a(x, u)
             a_x_grad = self._grad(a_x, x)
             d_a_x[i, :] = a_x_grad.squeeze()
@@ -196,7 +202,7 @@ class TrajectoryOptimization:
         """
         d_a_u = np.zeros((len(x), len(u)), dtype=np.float32)
 
-        for a, i in enumerate(self.a_D):
+        for i, a in enumerate(self.a_D):
             a_u = lambda u : a(x, u)
             a_u_grad = self._grad(a_u, u)
             d_a_u[i, :] = a_u_grad.squeeze()
@@ -222,3 +228,37 @@ class TrajectoryOptimization:
             grad[i] = (f_y_e - f_y) / eps
         
         return grad
+
+
+if __name__ == '__main__':
+    N = 10
+    t_f = 1.0
+
+    x_L = np.zeros((N, 2, 1), dtype=np.float32)
+    x_L[:, 1, 0] = -100.0  # Velocity can be small
+    x_L[N-1, 0, 0] = 1.0  # Endpoint has to be 1 (Equality constraint)
+
+    x_H = np.ones((N, 2, 1), dtype=np.float32)
+    x_H[:, 1, 0] = 100.0  # Velocity can be big
+    x_H[0, 0, 0] = 0.0  # Starting point has to be 0 (Equality constraint)
+
+    u_L = np.zeros((N-1, 1, 1), dtype=np.float32) - 100.0
+    u_H = np.zeros((N-1, 1, 1), dtype=np.float32) + 100.0
+
+    J = lambda x, u : (u**2).sum()  # Cost is the actuation squared
+
+    a1 = lambda x, u : x[1, 0]
+    a2 = lambda x, u : u[0, 0]
+    a = [a1, a2]
+
+    optimizer = TrajectoryOptimization(N, t_f, x_L, x_H, u_L, u_H, J, a)
+
+    # Initial trajectory
+    init_x_traj = np.ones((N, 2, 1), dtype=np.float32)  # Speed is 1
+    init_x_traj[:, 0, 0] = np.linspace(0, 1, N)  # Position is linear interpolation between 0 and 1
+    init_u_traj = np.zeros((N-1, 1, 1), dtype=np.float32)  # Actuation is 0
+
+    x_traj, u_traj, J_opt = optimizer.solve(init_x_traj, init_u_traj)
+    print(x_traj)
+    print(u_traj)
+    print(J_opt)

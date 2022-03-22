@@ -8,6 +8,7 @@ import numpy as np
 class GradientProjection:
     """
     Gradient Projection Nonlinear Program Solver Algorithm.
+    TODO: Cope with linearly dependent constraints.
     """
     def __init__(self, f, N_l, v_l, f_grad=None):
         """
