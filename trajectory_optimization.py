@@ -5,16 +5,27 @@ class TrajectoryOptimization:
     """
     Vectors have to be numpy column vectors if not stated differently!
     """
-    def __init__(self, N, t_f, J, a, d_J_x=None, d_J_u=None, d_a_x=None, d_a_u=None):
+    def __init__(self, N, t_f, x_L, x_H, u_L, u_H, J, a, d_J_x=None, d_J_u=None, d_a_x=None, d_a_u=None):
         """
-        a is a list of functions of of the form x_dot = a(x, u)
+        N is the number of discrete collocation points. t_f is the final time.
+        x_L, x_H, u_L, u_H are the upper and lower boundary constraints for state and control.
+        They have to be big column vectors of all states at all collocation points concatenated with eachother
+        of shape N*x_N x 1 for the state and (N-1)*x_U x 1 for the control (Like what J takes as arguments).
+        a is a list of functions of of the form x_dot = a(x, u).
         d_a_x and d_a_u are Jacobians of partial derivatives of the continuous a and can
-        be analytically supplied (highly recommended).
+        be analytically supplied (Highly recommended!).
         J is the discrete function to be minimized. Takes two big column vectors of the form
         x = [x_1, x_2, ... , x_N]^T and u = [u_1, u_2, ... , u_(N-1)]^T
         """
         self.N = N  # Number of discrete collocation points (this N is always one more than N in book)
-        self.dt = t_f / (N-1)
+        self.dt = t_f / (N-1)  # Time interval between discrete collocation points
+
+        # Upper and lower boundaries for x and u
+        self.x_L = x_L
+        self.x_H = x_H
+        self.u_L = u_L
+        self.u_H = u_H
+
         self.J = J  # Discrete Function to be minimized
         self._d_J_x = d_J_x  # dJ/dx
         self._d_J_u = d_J_u  # dJ/du
@@ -37,17 +48,28 @@ class TrajectoryOptimization:
         # Repeat until solution converges
         while True:
             As, Bs, cs = self._calc_A_B_c(x_traj, u_traj)
-            x_H = self._calc_x_H(As, cs, x_traj[0])
+            x_h = self._calc_x_h(As, cs, x_traj[0])
             D = self._calc_D(As, Bs)
 
-            # TODO: Derive N_l and v_l from boundary conditions
+            # Derive N_l and v_l from boundary conditions
+            N_u_L = np.eye(len(self.u_L), dtype=np.float32)
+            v_u_L = self.u_L
+            N_u_H = -np.eye(len(self.u_L), dtype=np.float32)
+            v_u_H = -self.u_H
+            N_x_L = D
+            v_x_L = self.x_L - x_h
+            N_x_H = -D
+            v_x_H = x_h - self.x_H
 
-            J_u = lambda u : self.J(D @ u + x_H, u)  # Find J of u
+            N_l = np.concatenate((N_u_L, N_u_H, N_x_L, N_x_H), axis=0).T
+            v_l = np.concatenate((v_u_L, v_u_H, v_x_L, v_x_H), axis=0)
+
+            J_u = lambda u : self.J(D @ u + x_h, u)  # Find J of u
             if self._d_J_x == None or self._d_J_u == None:
                 d_J_u_u = None
             else:
                 # Total derivative dJ/du made up from dx/du * dJ/dx + dJ/du.
-                d_J_u_u = lambda u : D.T @ self._d_J_x(D @ u + x_H, u) + self._d_J_u(D @ u + x_H, u)
+                d_J_u_u = lambda u : D.T @ self._d_J_x(D @ u + x_h, u) + self._d_J_u(D @ u + x_h, u)
             
             solver = GradientProjection(J_u, N_l, v_l, d_J_u_u)
             u_traj_r = np.reshape(u_traj, (len(u_traj)*len(u_traj[0]), 1))
@@ -58,7 +80,7 @@ class TrajectoryOptimization:
             
             new_u_traj = np.reshape(new_u_traj, (len(u_traj), len(u_traj[0]), 1))
 
-            new_x_traj_r = D @ new_u_traj_r + x_H
+            new_x_traj_r = D @ new_u_traj_r + x_h
             new_x_traj = np.reshape(new_x_traj_r, (len(x_traj), len(x_traj[0]), 1))
 
             # Return if trajectory converges
@@ -108,19 +130,19 @@ class TrajectoryOptimization:
 
         return D
 
-    def _calc_x_H(self, As, cs, x_0):
+    def _calc_x_h(self, As, cs, x_0):
         """
-        Computes helper Vector x_H.
+        Computes helper Vector x_h.
         x_0 is the initial state of the trajectory.
         """
         x_N = len(x_0)  # State dimension
-        x_H = np.zeros((x_N * self.N, 1), dtype=np.float32)
-        x_H[0:x_N] = x_0
+        x_h = np.zeros((x_N * self.N, 1), dtype=np.float32)
+        x_h[0:x_N] = x_0
 
         for i in range(self.N - 1):
-            x_H[(i+1)*x_N:(i+2)*x_N] = As[i] @ x_H[i*x_N:(i+1)*x_N] + cs[i]
+            x_h[(i+1)*x_N:(i+2)*x_N] = As[i] @ x_h[i*x_N:(i+1)*x_N] + cs[i]
         
-        return x_H
+        return x_h
     
     def _calc_A_B_c(self, x_traj, u_traj):
         """
